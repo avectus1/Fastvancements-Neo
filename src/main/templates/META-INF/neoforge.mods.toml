@@ -7,6 +7,7 @@ modId = "${mod_id}"
 version = "${mod_version}"
 displayName = "${mod_name}"
 logoFile = "logo.png"
+logoBlur = false
 authors = "Misanthropy, bigenergy, txni, Mephodio"
 credits = "NeoForge 1.21.1 port by avectus1. Original mod by Misanthropy, bigenergy, txni and Mephodio."
 description = '''
