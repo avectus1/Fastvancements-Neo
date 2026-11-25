@@ -1,0 +1,1 @@
+{"criteria":{"c":{"trigger":"minecraft:inventory_changed","conditions":{"player":[{"condition":"minecraft:entity_properties","entity":"this","predicate":{"flags":{"is_on_fire":true}}}],"items":[{"items":"minecraft:stick"}]}}}}
