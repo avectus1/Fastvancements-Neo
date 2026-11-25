@@ -2,70 +2,97 @@ package com.misanthropy.linggango.fastvancements.mixin;
 
 import com.misanthropy.linggango.fastvancements.core.AdvancementThresholdManager;
 import com.misanthropy.linggango.fastvancements.core.FastvancementsConfig;
+import com.misanthropy.linggango.fastvancements.core.PrevStackSize;
 import com.misanthropy.linggango.fastvancements.duck.FastDuck;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import net.minecraft.advancements.CriterionTrigger;
+import net.minecraft.advancements.critereon.ContextAwarePredicate;
+import net.minecraft.advancements.critereon.EntityPredicate;
 import net.minecraft.advancements.critereon.InventoryChangeTrigger;
-import net.minecraft.advancements.critereon.SimpleCriterionTrigger;
 import net.minecraft.server.PlayerAdvancements;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.storage.loot.LootContext;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-
+/**
+ * Same result as vanilla's InventoryChangeTrigger#trigger (including the "player" condition check), but:
+ * <ul>
+ *   <li>returns before scanning the inventory when the player has no inventory_changed listeners,</li>
+ *   <li>skips criteria whose item list can't contain the changed item,</li>
+ *   <li>skips count-only changes that cross no count boundary used by any advancement,</li>
+ *   <li>scans the inventory at most once, and only if some criterion actually needs it.</li>
+ * </ul>
+ * Criteria that have a "player" condition are always fully evaluated, because the player's state can make
+ * them pass even when the inventory change itself is irrelevant.
+ */
 @Mixin(InventoryChangeTrigger.class)
-abstract class InventoryChangeTriggerMixin {
+public abstract class InventoryChangeTriggerMixin {
 
-    @SuppressWarnings("unchecked")
     @Inject(method = "trigger(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/world/entity/player/Inventory;Lnet/minecraft/world/item/ItemStack;)V",
-            at = @At(value = "HEAD"), cancellable = true)
-    public void trigger(ServerPlayer player, Inventory inv, ItemStack stack, CallbackInfo ci) {
+            at = @At("HEAD"), cancellable = true)
+    @SuppressWarnings("unchecked")
+    private void fastvancements$trigger(ServerPlayer player, Inventory inventory, ItemStack stack, CallbackInfo ci) {
         if (!FastvancementsConfig.inventoryChangeOpt) return;
         ci.cancel();
 
-        if (stack.isEmpty()
-                || stack.getCount() < ((FastDuck.ItemStackDuck) (Object) stack).fastvancements$getPrevSize()
-                || !AdvancementThresholdManager.passesThreshold(stack)) return;
-
         PlayerAdvancements advancements = player.getAdvancements();
-        Set<SimpleCriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance>> listeners =
-                ((SimpleCriterionTriggerAccessor<InventoryChangeTrigger.TriggerInstance>) this).fastvancements$getPlayers().get(advancements);
+        Set<CriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance>> listeners =
+                ((SimpleCriterionTriggerAccessor<InventoryChangeTrigger.TriggerInstance>) (Object) this)
+                        .fastvancements$getPlayers().get(advancements);
         if (listeners == null || listeners.isEmpty()) return;
 
-        List<SimpleCriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance>> valid = null;
+        int prev = FastvancementsConfig.containerMenuOpt ? PrevStackSize.get(stack) : -1;
+        boolean irrelevantCountChange = prev > 0 && !AdvancementThresholdManager.countChangeMatters(prev, stack);
+
+        boolean scanned = false;
         int full = 0, empty = 0, occupied = 0;
-        boolean counted = false;
+        LootContext context = null;
+        List<CriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance>> matched = null;
 
-        for (SimpleCriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance> listener : listeners) {
-            InventoryChangeTrigger.TriggerInstance instance = listener.getTriggerInstance();
-            if (((FastDuck.TriggerInstanceDuck) instance).fastvancements$canFastFail(stack)) continue;
+        for (CriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance> listener : listeners) {
+            InventoryChangeTrigger.TriggerInstance instance = listener.trigger();
+            Optional<ContextAwarePredicate> playerPredicate = instance.player();
 
-            if (!counted) {
-                counted = true;
-                int size = inv.getContainerSize();
-                for (int slot = 0; slot < size; ++slot) {
-                    ItemStack invStack = inv.getItem(slot);
-                    if (!invStack.isEmpty()) {
-                        ++occupied;
-                        if (invStack.getCount() >= invStack.getMaxStackSize()) ++full;
+            if (playerPredicate.isEmpty()) {
+                if (irrelevantCountChange) continue;
+                if (((FastDuck.TriggerInstanceDuck) (Object) instance).fastvancements$canFastFail(stack)) continue;
+            }
+
+            if (!scanned) {
+                scanned = true;
+                for (int i = 0, size = inventory.getContainerSize(); i < size; i++) {
+                    ItemStack slot = inventory.getItem(i);
+                    if (slot.isEmpty()) {
+                        empty++;
+                    } else {
+                        occupied++;
+                        if (slot.getCount() >= slot.getMaxStackSize()) full++;
                     }
                 }
-                empty = size - occupied;
             }
 
-            if (instance.matches(inv, stack, full, empty, occupied)) {
-                if (valid == null) valid = new ArrayList<>();
-                valid.add(listener);
+            if (!instance.matches(inventory, stack, full, empty, occupied)) continue;
+
+            if (playerPredicate.isPresent()) {
+                if (context == null) context = EntityPredicate.createContext(player, player);
+                if (!playerPredicate.get().matches(context)) continue;
             }
+
+            if (matched == null) matched = new ArrayList<>(2);
+            matched.add(listener);
         }
 
-        if (valid != null) {
-            for (SimpleCriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance> listener : valid) {
+        // Run after iterating: awarding a criterion removes listeners from the set.
+        if (matched != null) {
+            for (CriterionTrigger.Listener<InventoryChangeTrigger.TriggerInstance> listener : matched) {
                 listener.run(advancements);
             }
         }

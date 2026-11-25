@@ -2,18 +2,14 @@
   "required": true,
   "minVersion": "0.8",
   "package": "com.misanthropy.linggango.fastvancements.mixin",
-  "compatibilityLevel": "JAVA_8",
-  "refmap": "fastvancements.refmap.json",
+  "compatibilityLevel": "JAVA_21",
   "mixins": [
     "AbstractContainerMenuMixin",
     "InventoryChangeTriggerInstanceMixin",
     "InventoryChangeTriggerMixin",
-    "ItemPredicateMixin",
-    "ItemStackMixin",
     "PlayerTriggerMixin",
+    "ServerPlayerMixin",
     "SimpleCriterionTriggerAccessor"
-  ],
-  "client": [
   ],
   "injectors": {
     "defaultRequire": 1

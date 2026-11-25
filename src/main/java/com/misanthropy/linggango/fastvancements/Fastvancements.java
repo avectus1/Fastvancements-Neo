@@ -2,32 +2,24 @@ package com.misanthropy.linggango.fastvancements;
 
 import com.misanthropy.linggango.fastvancements.core.AdvancementThresholdManager;
 import com.misanthropy.linggango.fastvancements.core.FastvancementsConfig;
-import com.misanthropy.linggango.fastvancements.core.ThrottleMaps;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.event.AddReloadListenerEvent;
-import net.minecraftforge.event.entity.player.PlayerEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ModConfig;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.AddReloadListenerEvent;
 
 @Mod(Fastvancements.MODID)
-public class Fastvancements {
-
+public final class Fastvancements {
     public static final String MODID = "fastvancements";
 
-    public Fastvancements() {
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, FastvancementsConfig.COMMON_SPEC);
-        MinecraftForge.EVENT_BUS.register(this);
+    public Fastvancements(IEventBus modBus, ModContainer container) {
+        container.registerConfig(ModConfig.Type.COMMON, FastvancementsConfig.SPEC);
+        modBus.addListener(FastvancementsConfig::onConfigEvent);
+        NeoForge.EVENT_BUS.addListener(Fastvancements::onAddReloadListeners);
     }
 
-    @SubscribeEvent
-    public void onAddReloadListeners(AddReloadListenerEvent event) {
+    private static void onAddReloadListeners(AddReloadListenerEvent event) {
         event.addListener(new AdvancementThresholdManager());
-    }
-
-    @SubscribeEvent
-    public void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
-        ThrottleMaps.purge(event.getEntity().getUUID());
     }
 }

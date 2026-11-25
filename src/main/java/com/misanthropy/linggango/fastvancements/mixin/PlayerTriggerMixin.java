@@ -1,51 +1,40 @@
 package com.misanthropy.linggango.fastvancements.mixin;
 
 import com.misanthropy.linggango.fastvancements.core.FastvancementsConfig;
-import com.misanthropy.linggango.fastvancements.core.ThrottleMaps;
-import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+import com.misanthropy.linggango.fastvancements.duck.FastDuck;
+import net.minecraft.advancements.CriteriaTriggers;
 import net.minecraft.advancements.critereon.PlayerTrigger;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
-import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.UUID;
-
+/**
+ * PlayerTrigger is shared by location, tick, slept_in_bed, hero_of_the_village, voluntary_exile and
+ * avoid_vibration. Only the two periodic ones (location, tick) are throttled; the others are one-shot events.
+ */
 @Mixin(PlayerTrigger.class)
-public class PlayerTriggerMixin {
-
-    @Shadow @Final ResourceLocation id;
-
+public abstract class PlayerTriggerMixin {
+    /** 0 = not resolved yet, 1 = location, 2 = tick, 3 = never throttle */
     @Unique
-    private final Object2IntOpenHashMap<UUID> fastvancements$skipTicks = ThrottleMaps.track(new Object2IntOpenHashMap<>());
-
-    @Unique
-    private byte fastvancements$throttled;
+    private byte fastvancements$kind;
 
     @Inject(method = "trigger(Lnet/minecraft/server/level/ServerPlayer;)V", at = @At("HEAD"), cancellable = true)
-    private void fastvancements$throttleTrigger(ServerPlayer player, CallbackInfo ci) {
+    private void fastvancements$throttle(ServerPlayer player, CallbackInfo ci) {
         if (!FastvancementsConfig.locationTickOpt) return;
+        int skip = FastvancementsConfig.locationSkipTicks;
+        if (skip <= 0) return;
 
-        byte throttled = fastvancements$throttled;
-        if (throttled == 0) {
-            String path = this.id.getPath();
-            throttled = path.equals("location") || path.equals("tick") ? (byte) 1 : (byte) 2;
-            fastvancements$throttled = throttled;
+        byte kind = fastvancements$kind;
+        if (kind == 0) {
+            Object self = this;
+            kind = self == CriteriaTriggers.LOCATION ? (byte) 1 : self == CriteriaTriggers.TICK ? (byte) 2 : (byte) 3;
+            fastvancements$kind = kind;
         }
-        if (throttled != 1) return;
+        if (kind == 3) return;
 
-        UUID uuid = player.getUUID();
-        int ticks = fastvancements$skipTicks.getInt(uuid);
-        if (ticks < FastvancementsConfig.locationSkipTicks) {
-            fastvancements$skipTicks.put(uuid, ticks + 1);
-            ci.cancel();
-        } else if (ticks != 0) {
-            fastvancements$skipTicks.put(uuid, 0);
-        }
+        if (((FastDuck.PlayerThrottleDuck) player).fastvancements$shouldSkip(kind - 1, skip)) ci.cancel();
     }
 }

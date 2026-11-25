@@ -1,7 +1,10 @@
 package com.misanthropy.linggango.fastvancements.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.sugar.Local;
 import com.misanthropy.linggango.fastvancements.core.FastvancementsConfig;
-import com.misanthropy.linggango.fastvancements.duck.FastDuck;
+import com.misanthropy.linggango.fastvancements.core.PrevStackSize;
 import net.minecraft.core.NonNullList;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -9,31 +12,33 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
-
-import java.util.function.Supplier;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 
 @Mixin(AbstractContainerMenu.class)
-abstract class AbstractContainerMenuMixin {
+public abstract class AbstractContainerMenuMixin {
 
-    @Redirect(method = "addSlot(Lnet/minecraft/world/inventory/Slot;)Lnet/minecraft/world/inventory/Slot;",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/core/NonNullList;add(Ljava/lang/Object;)Z", ordinal = 1))
-    protected boolean addSlot(NonNullList<ItemStack> lastSlots, Object emptyStack, Slot slot) {
-        boolean seed = !FastvancementsConfig.containerMenuOpt
-                || (slot.container instanceof Inventory && slot.hasItem());
-        lastSlots.add(seed ? slot.getItem().copy() : ItemStack.EMPTY);
-        return true;
+    /**
+     * Vanilla seeds lastSlots with EMPTY, so the first broadcastChanges() after opening any container reports
+     * every non-empty player-inventory slot as changed and fires inventory_changed once per slot (each with a
+     * full inventory scan). Seed player-inventory slots with their current contents instead: nothing changed.
+     * (ordinal 0 = slots.add, 1 = lastSlots.add, 2 = remoteSlots.add)
+     */
+    @ModifyArg(method = "addSlot", at = @At(value = "INVOKE", target = "Lnet/minecraft/core/NonNullList;add(Ljava/lang/Object;)Z", ordinal = 1))
+    private Object fastvancements$seedLastSlot(Object original, @Local(argsOnly = true) Slot slot) {
+        if (FastvancementsConfig.containerMenuOpt && slot.container instanceof Inventory && slot.hasItem()) {
+            return slot.getItem().copy();
+        }
+        return original;
     }
 
-    @Inject(method = "triggerSlotListeners(ILnet/minecraft/world/item/ItemStack;Ljava/util/function/Supplier;)V",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/core/NonNullList;set(ILjava/lang/Object;)Ljava/lang/Object;", shift = At.Shift.AFTER),
-            locals = LocalCapture.CAPTURE_FAILSOFT)
-    private void triggerSlotListeners(int slotNumber, ItemStack newStack, Supplier<ItemStack> newStackSupplier, CallbackInfo ci, ItemStack oldStack, ItemStack newStack1) {
-        if (FastvancementsConfig.containerMenuOpt && ItemStack.isSameItem(newStack1, oldStack)) {
-            ((FastDuck.ItemStackDuck) (Object) newStack1).fastvancements$setPrevSize(oldStack.getCount());
+    /** Remember the old count when only the count of a slot changed, for the inventory_changed trigger. */
+    @WrapOperation(method = "triggerSlotListeners", at = @At(value = "INVOKE", target = "Lnet/minecraft/core/NonNullList;set(ILjava/lang/Object;)Ljava/lang/Object;"))
+    private Object fastvancements$stampPrevSize(NonNullList<Object> list, int index, Object value, Operation<Object> original) {
+        Object old = original.call(list, index, value);
+        if (FastvancementsConfig.containerMenuOpt && old instanceof ItemStack oldStack && value instanceof ItemStack newStack
+                && !oldStack.isEmpty() && !newStack.isEmpty() && ItemStack.isSameItemSameComponents(oldStack, newStack)) {
+            PrevStackSize.set(newStack, oldStack.getCount());
         }
+        return old;
     }
 }

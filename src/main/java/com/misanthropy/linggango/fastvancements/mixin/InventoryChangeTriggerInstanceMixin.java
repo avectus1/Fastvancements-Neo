@@ -2,74 +2,52 @@ package com.misanthropy.linggango.fastvancements.mixin;
 
 import com.misanthropy.linggango.fastvancements.core.FastvancementsConfig;
 import com.misanthropy.linggango.fastvancements.duck.FastDuck;
-import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
+import java.util.Optional;
+import java.util.Set;
 import net.minecraft.advancements.critereon.InventoryChangeTrigger;
 import net.minecraft.advancements.critereon.ItemPredicate;
-import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.core.Holder;
+import net.minecraft.core.HolderSet;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
-import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
-import java.util.List;
-import java.util.Set;
-// yo
 @Mixin(InventoryChangeTrigger.TriggerInstance.class)
-abstract class InventoryChangeTriggerInstanceMixin implements FastDuck.TriggerInstanceDuck {
-
-    @Shadow @Final private ItemPredicate[] predicates;
-
-    @Unique private Set<Item> fastvancements$exactItems;
-    @Unique private boolean fastvancements$analyzed;
+public abstract class InventoryChangeTriggerInstanceMixin implements FastDuck.TriggerInstanceDuck {
+    @Unique
+    private boolean fastvancements$analyzed;
+    /** Union of every item any of this criterion's predicates can match, or null if that set is unbounded. */
+    @Unique
+    private Set<Item> fastvancements$items;
 
     @Override
-    public boolean fastvancements$canFastFail(ItemStack stack) {
+    public boolean fastvancements$canFastFail(ItemStack changed) {
         if (!FastvancementsConfig.fastItemMatching) return false;
-
         if (!fastvancements$analyzed) {
+            fastvancements$items = fastvancements$collectItems();
             fastvancements$analyzed = true;
-            fastvancements$exactItems = fastvancements$collectExactItems();
         }
-
-        Set<Item> exact = fastvancements$exactItems;
-        return exact != null && !exact.contains(stack.getItem());
+        Set<Item> items = fastvancements$items;
+        return items != null && !items.contains(changed.getItem());
     }
 
     @Unique
-    private Set<Item> fastvancements$collectExactItems() {
-        Set<Item> exact = null;
-        for (ItemPredicate p : predicates) {
-            FastDuck.ItemPredicateDuck duck = (FastDuck.ItemPredicateDuck) p;
-            Set<Item> items = duck.fastvancements$getSpecificItems();
-            if (duck.fastvancements$isComplex() || p == ItemPredicate.ANY || items == null) return null;
-            if (exact == null) exact = new ObjectOpenHashSet<>();
-            exact.addAll(items);
+    private Set<Item> fastvancements$collectItems() {
+        InventoryChangeTrigger.TriggerInstance self = (InventoryChangeTrigger.TriggerInstance) (Object) this;
+        // Slot-count conditions can be affected by any item, and an empty item list matches everything.
+        if (self.items().isEmpty() || !InventoryChangeTrigger.TriggerInstance.Slots.ANY.equals(self.slots())) return null;
+        Set<Item> result = new ReferenceOpenHashSet<>();
+        try {
+            for (ItemPredicate predicate : self.items()) {
+                Optional<HolderSet<Item>> items = predicate.items();
+                if (items.isEmpty()) return null;
+                for (Holder<Item> holder : items.get()) result.add(holder.value());
+            }
+        } catch (RuntimeException e) {
+            return null; // e.g. unbound tag: just don't optimize this criterion
         }
-        return exact;
-    }
-
-    @Inject(method = "matches(Lnet/minecraft/world/entity/player/Inventory;Lnet/minecraft/world/item/ItemStack;III)Z",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/player/Inventory;getContainerSize()I", ordinal = 0),
-            locals = LocalCapture.CAPTURE_FAILHARD, cancellable = true)
-    public void matches(Inventory inventory, ItemStack itemStack, int i, int j, int k, CallbackInfoReturnable<Boolean> cir, int predicatesLength, List<ItemPredicate> predicatesList) {
-        if (FastvancementsConfig.fastItemMatching
-                && !predicatesList.removeIf(p -> ((FastDuck.ItemPredicateDuck) p).fastvancements$fastMatch(itemStack))) {
-            cir.setReturnValue(false);
-        }
-    }
-
-    @Redirect(method = "matches(Lnet/minecraft/world/entity/player/Inventory;Lnet/minecraft/world/item/ItemStack;III)Z",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/advancements/critereon/ItemPredicate;matches(Lnet/minecraft/world/item/ItemStack;)Z"))
-    public boolean itemPredicateMatches(ItemPredicate itemPredicate, ItemStack itemStack) {
-        return FastvancementsConfig.fastItemMatching
-                ? ((FastDuck.ItemPredicateDuck) itemPredicate).fastvancements$fastMatch(itemStack)
-                : itemPredicate.matches(itemStack);
+        return result;
     }
 }

@@ -1,15 +1,45 @@
 package com.misanthropy.linggango.fastvancements.core;
 
-import net.minecraftforge.common.ForgeConfigSpec;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.event.config.ModConfigEvent;
-import org.apache.commons.lang3.tuple.Pair;
+import net.neoforged.fml.event.config.ModConfigEvent;
+import net.neoforged.neoforge.common.ModConfigSpec;
 
-@Mod.EventBusSubscriber(modid = "fastvancements", bus = Mod.EventBusSubscriber.Bus.MOD)
-public class FastvancementsConfig {
-    public static final ForgeConfigSpec COMMON_SPEC;
-    public static final Common COMMON;
+/**
+ * Config keys are identical to the original port so existing fastvancements-common.toml files keep working.
+ * Values are mirrored into plain static fields because they are read on very hot paths.
+ */
+public final class FastvancementsConfig {
+    private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
+
+    static {
+        BUILDER.push("Optimizations");
+    }
+
+    private static final ModConfigSpec.BooleanValue CONTAINER_MENU = BUILDER
+            .comment("Don't re-fire inventory_changed for every player-inventory slot each time a container is opened,",
+                    "and remember the previous stack size of changed slots so count-only changes can be skipped.")
+            .define("enableContainerMenuOptimization", true);
+    private static final ModConfigSpec.BooleanValue INVENTORY_CHANGE = BUILDER
+            .comment("Use the optimized inventory_changed trigger (lazy inventory scan, item pre-filtering,",
+                    "skipping stack-size changes that cross no count threshold used by any advancement).")
+            .define("enableInventoryChangeOptimization", true);
+    private static final ModConfigSpec.BooleanValue LOCATION_TICK = BUILDER
+            .comment("Throttle the minecraft:location and minecraft:tick triggers per player.",
+                    "Other player triggers (slept_in_bed, hero_of_the_village, ...) are never throttled.")
+            .define("enableLocationTickOptimization", true);
+    private static final ModConfigSpec.IntValue SKIP = BUILDER
+            .comment("How many trigger calls to skip after each processed one. 0 = vanilla.",
+                    "Vanilla checks location once per second and tick once per tick, so 10 means",
+                    "location advancements are checked every ~11 s and tick advancements every 11 ticks.")
+            .defineInRange("locationTickSkipTicks", 10, 0, 1000);
+    private static final ModConfigSpec.BooleanValue FAST_ITEM = BUILDER
+            .comment("Skip criteria whose item list cannot match the changed item without evaluating them.")
+            .define("enableFastItemMatching", true);
+
+    static {
+        BUILDER.pop();
+    }
+
+    public static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean containerMenuOpt = true;
     public static boolean inventoryChangeOpt = true;
@@ -17,54 +47,14 @@ public class FastvancementsConfig {
     public static int locationSkipTicks = 10;
     public static boolean fastItemMatching = true;
 
-    static {
-        final Pair<Common, ForgeConfigSpec> specPair = new ForgeConfigSpec.Builder().configure(Common::new);
-        COMMON_SPEC = specPair.getRight();
-        COMMON = specPair.getLeft();
-    }
+    private FastvancementsConfig() {}
 
-    @SubscribeEvent
-    public static void onConfigLoad(final ModConfigEvent event) {
-        if (event.getConfig().getSpec() == COMMON_SPEC) {
-            containerMenuOpt = COMMON.enableContainerMenuOptimization.get();
-            inventoryChangeOpt = COMMON.enableInventoryChangeOptimization.get();
-            locationTickOpt = COMMON.enableLocationTickOptimization.get();
-            locationSkipTicks = COMMON.locationTickSkipTicks.get();
-            fastItemMatching = COMMON.enableFastItemMatching.get();
-        }
-    }
-
-    public static class Common {
-        public final ForgeConfigSpec.BooleanValue enableContainerMenuOptimization;
-        public final ForgeConfigSpec.BooleanValue enableInventoryChangeOptimization;
-        public final ForgeConfigSpec.BooleanValue enableLocationTickOptimization;
-        public final ForgeConfigSpec.IntValue locationTickSkipTicks;
-        public final ForgeConfigSpec.BooleanValue enableFastItemMatching;
-
-        public Common(ForgeConfigSpec.Builder builder) {
-            builder.push("Optimizations");
-
-            enableContainerMenuOptimization = builder
-                    .comment("Enable container menu slot tracking optimizations.")
-                    .define("enableContainerMenuOptimization", true);
-
-            enableInventoryChangeOptimization = builder
-                    .comment("Enable optimized inventory change triggers.")
-                    .define("enableInventoryChangeOptimization", true);
-
-            enableLocationTickOptimization = builder
-                    .comment("Enable optimized location and tick triggers.")
-                    .define("enableLocationTickOptimization", true);
-
-            locationTickSkipTicks = builder
-                    .comment("Ticks to skip between location/tick checks. Vanilla is 0 (Default: 10).")
-                    .defineInRange("locationTickSkipTicks", 10, 0, 1200);
-
-            enableFastItemMatching = builder
-                    .comment("Enable fast item predicate matching for advancements.")
-                    .define("enableFastItemMatching", true);
-
-            builder.pop();
-        }
+    public static void onConfigEvent(ModConfigEvent event) {
+        if (event instanceof ModConfigEvent.Unloading || event.getConfig().getSpec() != SPEC) return;
+        containerMenuOpt = CONTAINER_MENU.getAsBoolean();
+        inventoryChangeOpt = INVENTORY_CHANGE.getAsBoolean();
+        locationTickOpt = LOCATION_TICK.getAsBoolean();
+        locationSkipTicks = SKIP.getAsInt();
+        fastItemMatching = FAST_ITEM.getAsBoolean();
     }
 }
